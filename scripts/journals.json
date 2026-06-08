@@ -1,0 +1,30 @@
+{
+  "_emoji_rules": {
+    "meta-?analysis|systematic review|pooled": "📊",
+    "randomized|randomised|\\brct\\b|placebo|double-?blind|clinical trial": "💊",
+    "eeg|mri|fmri|neuroimaging|brain (morphology|structure)|microstate|cortex|white matter": "🧠",
+    "polygenic|genome|genetic|gwas|heritab|snp": "🧬",
+    "child|adolescen|youth|paediatric|pediatric": "👶",
+    "diet|nutrition|microbiota|gut|fatty acid|metaboli": "🍽️",
+    "cohort|register|longitudinal|prospective": "📈",
+    "care|service|recommendation|guideline|management|real-?world": "🏥",
+    "biomarker|plasma|blood|serum|csf": "🧪",
+    "mortality|suicide|death|survival": "⚠️",
+    "language model|chatbot|artificial intelligence|machine learning|\\bai\\b": "🤖"
+  },
+  "psychiatry": {
+    "label": "精神病学 / 心理学",
+    "journals": [
+      {"name": "World Psychiatry", "issn": "1723-8617", "if": "73.3", "zone": "Q1 (精神病学全球第一)"},
+      {"name": "The Lancet Psychiatry", "issn": "2215-0366", "if": "30.8", "zone": "Q1 (Top)"},
+      {"name": "JAMA Psychiatry", "issn": "2168-622X", "if": "25.8", "zone": "Q1 (Top)"},
+      {"name": "American Journal of Psychiatry", "issn": "0002-953X", "if": "17.7", "zone": "Q1"},
+      {"name": "Molecular Psychiatry", "issn": "1359-4184", "if": "9.6", "zone": "Q1"},
+      {"name": "Biological Psychiatry", "issn": "0006-3223", "if": "9.6", "zone": "Q1"},
+      {"name": "Schizophrenia Bulletin", "issn": "0586-7614", "if": "7.3", "zone": "Q1"},
+      {"name": "Psychological Medicine", "issn": "0033-2917", "if": "6.9", "zone": "Q1"},
+      {"name": "Journal of Affective Disorders", "issn": "0165-0327", "if": "6.6", "zone": "Q1"},
+      {"name": "Translational Psychiatry", "issn": "2158-3188", "if": "5.8", "zone": "Q1"}
+    ]
+  }
+}
