@@ -115,6 +115,11 @@ def render_single(data, index=0, title_prefix="", max_body_chars=10000, max_figu
     authors = r.get("authors", "")
     body_text = r.get("body_text", "")
     figures = r.get("figures", [])
+    # v5 新增:body 各段的中文意译 + figures caption 中文意译
+    #   zh_body_sections: list[str],与 body_text 按段顺序一一对应(空字符串 = 该段没翻译,显示英文原文)
+    #   zh_figure_captions: dict[str, str] 形如 {"Fig. 1": "图 1 译文"}
+    zh_body_sections = r.get("zh_body_sections", []) or []
+    zh_figure_captions = r.get("zh_figure_captions", {}) or {}
 
     p = []
     # 标题:v2 markdown 必带 <title> XML 标签(lark-cli 坑)
@@ -153,24 +158,35 @@ def render_single(data, index=0, title_prefix="", max_body_chars=10000, max_figu
         for para in en_abstract.split("\n\n"):
             p.append(f'<p>{esc(para)}</p>')
 
-    # 原文主体(2026-06-16 v2 新增;v4 2026-06-17 扩到 10000 字符)— 分多个 <p> 块(单块 4000 字符)
+    # 原文主体(v2/v4;v5 2026-06-17 加中文意译)— 中英对照(中文在上,英文在下)
     if body_text and body_text.strip():
-        p.append('<h2>📖 原文主体 / Full Text Body</h2>')
-        p.append('<p><span text-color="gray">以下为 PMC 全文前若干段(英文原文,按段落分隔,自动跳过短于 40 字符的短段;长段拆成多个块避免 docx 单块超限)。如需完整正文,请点击下方 PMC 全文链接。</span></p>')
+        p.append('<h2>📖 原文主体(中英对照)/ Full Text Body (Bilingual)</h2>')
+        p.append('<p><span text-color="gray">以下为 PMC 全文前若干段(中英双语对照,中文为意译;长段拆成多个块避免 docx 单块超限)。如需完整正文,请点击下方 PMC 全文链接。</span></p>')
         body_to_show = body_text
         if len(body_to_show) > max_body_chars:
             body_to_show = body_to_show[:max_body_chars] + "..."
-        for para in body_to_show.split("\n\n"):
-            if para.strip():
-                # 长段拆:每 ~3000 字符拆一个 <p>
-                if len(para) > 3000:
-                    for i in range(0, len(para), 3000):
-                        chunk = para[i:i+3000]
-                        p.append(f'<p>{esc(chunk)}</p>')
+        en_paras = [para for para in body_to_show.split("\n\n") if para.strip()]
+        for i, en_para in enumerate(en_paras):
+            # 取对应中文段(若无翻译则空,跳过中文块)
+            zh_para = zh_body_sections[i] if i < len(zh_body_sections) else ""
+            # 中文段(若存在)
+            if zh_para.strip():
+                # 长段拆
+                if len(zh_para) > 3000:
+                    for j in range(0, len(zh_para), 3000):
+                        chunk = zh_para[j:j+3000]
+                        p.append(f'<p><b>🇨🇳 {esc(chunk)}</b></p>')
                 else:
-                    p.append(f'<p>{esc(para)}</p>')
+                    p.append(f'<p><b>🇨🇳 {esc(zh_para)}</b></p>')
+            # 英文段
+            if len(en_para) > 3000:
+                for j in range(0, len(en_para), 3000):
+                    chunk = en_para[j:j+3000]
+                    p.append(f'<p><span text-color="gray">🇬🇧 {esc(chunk)}</span></p>')
+            else:
+                p.append(f'<p><span text-color="gray">🇬🇧 {esc(en_para)}</span></p>')
 
-    # 图片(2026-06-16 v2 新增)— 飞书 <img href="..."/> 自动下载嵌入
+    # 图片(v2 新增;v5 加中文 caption)— 飞书 <img href="..."/> 自动下载嵌入
     if figures:
         figs_to_show = figures[:max_figures]
         p.append(f'<h2>🖼️ 图片 / Figures({len(figs_to_show)}/{len(figures)})</h2>')
@@ -180,11 +196,22 @@ def render_single(data, index=0, title_prefix="", max_body_chars=10000, max_figu
             label = f.get("label", "")
             caption = f.get("caption", "")
             url_fig = f["url"]
-            # 飞书 <img> 标签,自动下载嵌入
-            img_attrs = f'caption="{esc(label + (" " + caption if caption else ""))}"' if (label or caption) else ''
+            # 取中文 caption(若存在)
+            zh_caption = ""
+            if label and label in zh_figure_captions:
+                zh_caption = zh_figure_captions[label]
+            # 飞书 <img> 标签,自动下载嵌入(原 caption 在属性里)
+            full_caption = label + (" " + caption if caption else "")
+            if zh_caption:
+                full_caption += f" | 🇨🇳 {zh_caption}"
+            img_attrs = f'caption="{esc(full_caption)}"' if full_caption else ''
             p.append(f'<img href="{esc(url_fig)}" {img_attrs}/>')
+            # caption 说明(若原文)
             if caption and len(caption) > 0:
                 p.append(f'<p><span text-color="gray">{esc(label + " — " + caption) if label else esc(caption)}</span></p>')
+            # 中文 caption(独立段,加粗方便读)
+            if zh_caption:
+                p.append(f'<p><b>🇨🇳 {esc(label + " — " + zh_caption) if label else esc(zh_caption)}</b></p>')
         if len(figures) > max_figures:
             p.append(f'<p><span text-color="gray">…另有 {len(figures) - max_figures} 张图未展示,详见 PMC 全文链接。</span></p>')
 
