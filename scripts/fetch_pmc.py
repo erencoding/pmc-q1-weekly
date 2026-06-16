@@ -39,6 +39,42 @@ def http_get(url, timeout=60):
     raise last
 
 
+def resolve_figure_url(pmcid, filename, html=None):
+    """PMC JATS XML 里的 graphic href 是裸文件名,真 URL 在 HTML 渲染后注入。
+
+    策略:抓(已缓存)文章 HTML 页面 → 在 HTML 里 findall 所有 'cdn.ncbi.nlm.nih.gov/pmc/blobs/...' →
+    按 filename 末尾匹配(CDN 路径含 /{prefix}/{pmcid}/{hash}/{filename})。
+    失败兜底:走 bin 路径(老格式,部分文章可能仍可用)。
+
+    Args:
+        pmcid: 纯数字 PMCID
+        filename: JATS 里 graphic 的 href(裸文件名如 '41398_2026_4140_Fig1_HTML.jpg')
+        html: 已抓的 HTML 文本(可选,加速批量调用)
+
+    Returns:
+        完整 URL(str),失败返回 bin 路径(让 docx 链接仍可点)
+    """
+    if not filename or not pmcid:
+        return ""
+    if filename.startswith("http"):
+        return filename
+    fallback = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmcid}/bin/{filename}"
+    try:
+        if html is None:
+            html = get_html_page(pmcid)
+        if not html:
+            return fallback
+        # 在 HTML 里 findall 所有 CDN blob URL
+        all_cdn = re.findall(r'https://cdn\.ncbi\.nlm\.nih\.gov/pmc/blobs/[^"\s]+', html)
+        # 按 filename 末尾匹配
+        for cdn_url in all_cdn:
+            if cdn_url.endswith(filename) or cdn_url.split("/")[-1] == filename:
+                return cdn_url
+        return fallback
+    except Exception:
+        return fallback
+
+
 def eutils(endpoint, params):
     if API_KEY:
         params = dict(params, api_key=API_KEY)
@@ -112,9 +148,37 @@ def fetch_summaries(ids):
     return recs
 
 
-# ---------- 全文可读校验 ----------
+# ---------- 全文可读校验 + body 段落 + 图片 URL ----------
+# HTML 页面缓存(每 PMC id 只抓一次,避免 6 张图 × 1 次重复抓)
+_HTML_CACHE: dict = {}
+
+
+def get_html_page(pmcid):
+    """抓 PMC 文章 HTML 页面(per-pmcid 缓存)。返回 str,失败返 ''。"""
+    if pmcid in _HTML_CACHE:
+        return _HTML_CACHE[pmcid]
+    try:
+        url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmcid}/"
+        html = http_get(url, timeout=20)
+        _HTML_CACHE[pmcid] = html
+        time.sleep(0.3)
+        return html
+    except Exception:
+        _HTML_CACHE[pmcid] = ""
+        return ""
+
+
 def fetch_fulltext(ids):
-    """对 PMC id 取 abstract + 是否有 body + authors。"""
+    """对 PMC id 取 abstract + 是否有 body + authors + body 段 + 图片 URL。
+
+    输出 schema:
+      abstract: str                    # 摘要纯文本
+      has_fulltext: bool               # 是否有 body
+      authors: str                     # 前 3 作者 + et al.
+      body_sections: list[str]         # body 段落(英文,过滤短段)
+      body_text: str                   # body 全文拼接(限定 8000 字符防 docx 爆)
+      figures: list[dict]              # [{label, caption, url}],label=F1/F2/...
+    """
     out = {}
     for i in range(0, len(ids), 20):
         batch = [b for b in ids[i:i+20] if b]
@@ -145,6 +209,56 @@ def fetch_fulltext(ids):
                 ps = [" ".join("".join(p.itertext()).split()) for p in body.iter("p")]
                 ps = [p for p in ps if len(p) > 40]
                 abs_txt = "[正文摘录] " + " ".join(ps[:2]) if ps else ""
+
+            # body 段落(英文原文,过滤 <40 字符的短段)
+            body_sections = []
+            body_text_full = ""
+            if has_body:
+                for p in body.iter("p"):
+                    txt = " ".join("".join(p.itertext()).split())
+                    if len(txt) >= 40:
+                        body_sections.append(txt)
+                body_text_full = "\n\n".join(body_sections)
+                # 限 12000 字符防 docx 爆(原 8000,2026-06-17 v4 放宽到 12000 含全文主体)
+                if len(body_text_full) > 12000:
+                    body_text_full = body_text_full[:12000] + "..."
+
+            # 一次性抓 HTML 页面(供所有 fig 共享)
+            html_page = get_html_page(numid)
+
+            # 图片(label + caption + URL)
+            figures = []
+            for fig in art.iter("fig"):
+                label_el = fig.find("label")
+                caption_els = fig.findall("caption")
+                caption = " ".join(
+                    "".join(p.itertext()) for c in caption_els for p in c.iter("p")
+                ).strip()
+                if caption and len(caption) > 300:
+                    caption = caption[:300] + "..."
+                # 找 graphic 拿 filename
+                filenames = []
+                for g in fig.iter("graphic"):
+                    href = g.get("{http://www.w3.org/1999/xlink}href") or g.get("href")
+                    if not href or href.startswith("data:"):
+                        continue
+                    if href.startswith("http"):
+                        # 已是完整 URL,直接用
+                        filenames.append(href)
+                    else:
+                        # 裸文件名 / 相对路径
+                        filenames.append(href)
+                figures.append({
+                    "label": (label_el.text or "").strip() if label_el is not None else "",
+                    "caption": caption,
+                    "url": "",  # 第一轮不解析 URL(见下)
+                    "filename": filenames[0] if filenames else "",
+                })
+            # 批量解析图 URL(用一次性抓的 html_page)
+            for fig in figures:
+                if fig["filename"]:
+                    fig["url"] = resolve_figure_url(numid, fig["filename"], html=html_page)
+
             names = []
             for c in art.iter("contrib"):
                 if c.get("contrib-type") == "author":
@@ -156,6 +270,9 @@ def fetch_fulltext(ids):
                     "abstract": abs_txt.strip(),
                     "has_fulltext": bool(has_body),
                     "authors": "; ".join(names[:3]) + (" et al." if len(names) > 3 else ""),
+                    "body_sections": body_sections,
+                    "body_text": body_text_full,
+                    "figures": figures,
                 }
         time.sleep(SLEEP)
     return out
@@ -259,6 +376,8 @@ def collect(args, days):
             "emoji": pick_emoji(d["title"], info["abstract"], emoji_rules),
             "zh_title": "",
             "zh_abstract": "",
+            "body_text": info.get("body_text", ""),
+            "figures": info.get("figures", []),
         })
     recs.sort(key=lambda x: (x["date"], -(float(x["if_"]) if x["if_"] not in ("-", "") else 0)), reverse=True)
     return recs
